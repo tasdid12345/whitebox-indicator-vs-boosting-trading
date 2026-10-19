@@ -16,27 +16,61 @@ SEED = 42
 SEEDS = [42, 43, 44]  # both models are run with these seeds (LR is deterministic, LightGBM is randomized)
 TICKERS = ["aapl", "msft", "jpm", "xom", "jnj"]
 URL = "https://stooq.com/q/d/l/?s={}.us&i=d"
+YF_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{}?range=max&interval=1d&events=div%7Csplit"
 TRAIN_FRAC = 0.70
+SOURCE_USED = {}  # ticker -> data source actually used (recorded in results.json)
 np.random.seed(SEED)
 
 
+def _stooq(ticker):
+    """Primary source: stooq daily CSV."""
+    r = requests.get(URL.format(ticker), timeout=60)
+    if r.status_code == 429 or r.status_code >= 500:
+        raise requests.HTTPError(f"HTTP {r.status_code}")
+    r.raise_for_status()
+    df = pd.read_csv(io.StringIO(r.text))
+    if "Close" not in df.columns or df.empty:
+        raise ValueError("no data returned")
+    return df
+
+
+def _yahoo(ticker):
+    """Fallback source: Yahoo Finance public chart endpoint (daily OHLCV, adjusted close)."""
+    r = requests.get(YF_URL.format(ticker.upper()), headers={"User-Agent": "Mozilla/5.0"}, timeout=60)
+    if r.status_code == 429 or r.status_code >= 500:
+        raise requests.HTTPError(f"HTTP {r.status_code}")
+    r.raise_for_status()
+    res = r.json()["chart"]["result"][0]
+    q = res["indicators"]["quote"][0]
+    adj_block = res["indicators"].get("adjclose")
+    adj = adj_block[0]["adjclose"] if adj_block else q["close"]
+    df = pd.DataFrame({
+        "Date": pd.to_datetime(res["timestamp"], unit="s").normalize(),
+        "Open": q["open"], "High": q["high"], "Low": q["low"],
+        "Close": adj, "Volume": q["volume"],
+    }).dropna(subset=["Close"])
+    if df.empty:
+        raise ValueError("no data returned")
+    return df
+
+
 def download(ticker):
-    """Download daily OHLCV CSV from stooq; timeout=60, retry with backoff on 429/5xx."""
-    for attempt in range(5):
-        try:
-            r = requests.get(URL.format(ticker), timeout=60)
-            if r.status_code == 429 or r.status_code >= 500:
-                raise requests.HTTPError(f"HTTP {r.status_code}")
-            r.raise_for_status()
-            df = pd.read_csv(io.StringIO(r.text))
-            if "Close" not in df.columns or df.empty:
-                raise ValueError("no data returned")
-            return df
-        except (requests.RequestException, ValueError) as e:
-            wait = 2 ** attempt
-            print(f"  {ticker}: attempt {attempt + 1} failed ({e}); retrying in {wait}s")
-            time.sleep(wait)
-    sys.exit(f"ERROR: could not download {ticker}")
+    """Try stooq, then Yahoo chart API; each with retry/backoff on 429/5xx and network errors."""
+    errors = []
+    for name, fetch in (("stooq", _stooq), ("yahoo", _yahoo)):
+        for attempt in range(3):
+            try:
+                df = fetch(ticker)
+                SOURCE_USED[ticker] = name
+                return df
+            except Exception as e:  # network, HTTP, parse, or empty-data errors
+                errors.append(f"{name}: {e}")
+                wait = 2 ** attempt
+                print(f"  {ticker}: {name} attempt {attempt + 1} failed ({e}); retrying in {wait}s")
+                time.sleep(wait)
+                if "404" in str(e):  # not found: no point retrying this source
+                    break
+    sys.exit(f"ERROR: could not download {ticker} ({'; '.join(errors)})")
 
 
 def features(raw):
@@ -82,6 +116,7 @@ FEAT = [c for c in tr.columns if c not in ("target", "next_ret", "date", "ticker
 Xtr, ytr = tr[FEAT].values, tr["target"].values
 Xte, yte = te[FEAT].values, te["target"].values
 print(f"rows train={len(tr)} test={len(te)} features={len(FEAT)}")
+print("sources used:", SOURCE_USED)
 
 
 def run_baseline(seed):
@@ -150,12 +185,14 @@ metrics = {
     "baseline_max_drawdown": agg(base_res, "max_dd")[0], "improved_max_drawdown": agg(imp_res, "max_dd")[0],
     "buy_hold_sharpe": float(bh_sharpe), "n_seeds": len(SEEDS),
 }
+n_stooq = sum(v == "stooq" for v in SOURCE_USED.values())
 results = {
     "question": "Does a class-balanced, CV-tuned gradient-boosting model on technical indicators give a higher out-of-sample Sharpe ratio than a white-box logistic-regression model on the same indicators for daily stock trading?",
-    "method": "Daily OHLCV from stooq for AAPL, MSFT, JPM, XOM, JNJ; technical indicators from past prices; target = next-day up/down; per-ticker chronological 70/30 train/test split; long-or-flat strategy Sharpe on the test period.",
+    "method": "Daily OHLCV for AAPL, MSFT, JPM, XOM, JNJ (stooq, with Yahoo Finance chart API as fallback when stooq is unavailable); technical indicators from past prices; target = next-day up/down; per-ticker chronological 70/30 train/test split; long-or-flat strategy Sharpe on the test period.",
     "dataset": {
-        "name": "Stooq daily OHLCV: AAPL, MSFT, JPM, XOM, JNJ (US listings)",
-        "source_url": ", ".join(URL.format(t) for t in TICKERS),
+        "name": "Daily OHLCV: AAPL, MSFT, JPM, XOM, JNJ (US listings)",
+        "source_url": ", ".join(URL.format(t) for t in TICKERS) + " (fallback: " + YF_URL.format("<TICKER>") + ")",
+        "source_used": dict(SOURCE_USED),
         "n_rows": int(len(tr) + len(te)), "n_train": int(len(tr)), "n_test": int(len(te)),
         "same_as_paper": False, "baseline_is_papers_method": False,
     },
@@ -164,7 +201,9 @@ results = {
     "baseline": "Standardised logistic regression (default settings) on technical indicators; white-box.",
     "improved": "Class-balanced LightGBM, small time-series-CV hyperparameter search on training data only, isotonic calibration.",
     "metrics": metrics,
-    "notes": ("Single chronological 70/30 split per ticker; one test period, so results are sensitive to the market regime. "
+    "notes": (f"Single chronological 70/30 split per ticker; one test period, so results are sensitive to the market regime. "
+              f"Price data: {n_stooq}/{len(TICKERS)} tickers from stooq, the rest from the Yahoo Finance chart API fallback "
+              "(stooq returned 404 for some tickers in CI); Yahoo prices use adjusted close. "
               "Hyperparameters chosen by time-series CV on training data only; test set used once. "
               "Logistic regression is deterministic (std 0 across seeds); LightGBM varies with seed. "
               "No transaction costs or slippage. Data (~25k rows) is far below the 200k subsampling threshold, so none applied. "

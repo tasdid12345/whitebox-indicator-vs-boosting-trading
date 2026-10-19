@@ -1,21 +1,33 @@
-# Gradient Boosting vs Logistic Regression on Technical Indicators for Daily Stock Trading
+# Stock direction: logistic regression vs class-balanced LightGBM
 
-This experiment is motivated by "Investment Portfolio Optimization Using Technical Indicators and White-Box Models" (2024), which argues that technical indicators combined with white-box models can support portfolio decisions. We test whether a more flexible but still tunable model on the same indicators gives a better out-of-sample risk-adjusted return than a white-box logistic regression.
+Question: does a class-balanced, CV-tuned gradient-boosting model on technical indicators give a higher out-of-sample Sharpe ratio than a standardised logistic regression on the same indicators?
 
-**Question:** Does a class-balanced, CV-tuned gradient-boosting model on technical indicators give a higher out-of-sample Sharpe ratio than a white-box logistic-regression model on the same indicators for daily stock trading?
+## Data
+- Daily OHLCV for AAPL, MSFT, JPM, XOM, JNJ.
+- Primary source: stooq (`https://stooq.com/q/d/l/?s={ticker}.us&i=d`).
+- Fallback: Yahoo Finance public chart API, used automatically when stooq fails (it returned HTTP 404 for AAPL in CI). Yahoo prices use adjusted close.
+- The source actually used for each ticker is recorded in `results.json` under `dataset.source_used`.
 
-**Dataset:** Daily OHLCV price histories for AAPL, MSFT, JPM, XOM and JNJ, downloaded as CSV from stooq.com. This is not the paper's own dataset (`same_as_paper: false`). Features are SMA/EMA ratios, RSI, MACD, Bollinger position, rolling volatility and multi-window momentum, all computed from past prices. The target is next-day up/down. Each ticker is split chronologically: the first 70% trains and the last 30% tests.
+## Method
+- Features: technical indicators computed only from past prices (SMAs, EMA ratio, RSI, MACD, Bollinger position, volatility, momentum).
+- Target: next-day up/down.
+- Split: per ticker, first 70% of rows for training and last 30% for testing, in chronological order.
+- Strategy: long-or-flat (hold next day iff P(up) > 0.5), equal-weight across tickers; metric is the annualised Sharpe ratio on the test period.
+- Baseline: standardised logistic regression with default settings.
+- Improved: class-balanced LightGBM, hyperparameters chosen by time-series CV on the training data only, isotonic calibration.
+- Seeds 42, 43, 44; mean and standard deviation are reported.
 
-**Baseline vs improved:** The baseline is a standardised logistic regression with default settings. The improved model is a class-balanced LightGBM with a small time-series-CV hyperparameter search on the training part only, followed by isotonic calibration. Both models use the same data, features, test set and evaluation function. The main metric is the annualised Sharpe ratio of a long-or-flat strategy; directional accuracy, F1 and maximum drawdown are secondary.
-
-## How to run
-
-```bash
+## Run
+```
 pip install -r requirements.txt
 python analysis.py
 ```
+Outputs: `results.json` and `figures/sharpe_comparison.png`.
 
-Results: results are written to `results.json` (charts go to `figures/`).
+## Caveats
+- One chronological split per ticker, so results depend on the test-period market regime.
+- No transaction costs or slippage.
+- The baseline is a generic logistic regression, since the source paper's white-box algorithm is not specified.
 
 ## Reference
 
