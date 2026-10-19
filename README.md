@@ -29,6 +29,30 @@ Outputs: `results.json` and `figures/sharpe_comparison.png`.
 - No transaction costs or slippage.
 - The baseline is a generic logistic regression, since the source paper's white-box algorithm is not specified.
 
+## Results (latest run)
+
+On daily OHLCV data for five US stocks (AAPL, MSFT, JPM, XOM, JNJ), a standard logistic-regression white-box baseline reached a test Sharpe ratio of 8.08, while a class-balanced, CV-tuned LightGBM reached 8.89, a small gain from one 70/30 split without transaction costs.
+
+| Metric | Value |
+|---|---|
+| baseline_score | 8.083 |
+| improved_score | 8.892 |
+| improvement | 0.8086 |
+| baseline_score_std | 0 |
+| improved_score_std | 0 |
+| baseline_accuracy | 0.638 |
+| improved_accuracy | 0.681 |
+| baseline_f1 | 0.7739 |
+| improved_f1 | 0.7984 |
+| baseline_max_drawdown | -0.2752 |
+| improved_max_drawdown | -0.2278 |
+| buy_hold_sharpe | 8.097 |
+| n_seeds | 3 |
+
+Run on 2026-10-19. Full output: [results.json](results.json) · [run.log](run.log)
+
+Notes: Single chronological 70/30 split per ticker; one test period, so results are sensitive to the market regime. Price data: 0/5 tickers from stooq, the rest from the Yahoo Finance chart API fallback (stooq returned 404 for some tickers in CI); Yahoo prices use adjusted close. Hyperparameters chosen by time-series CV on training data only; test set used once. Logistic regression is deterministic (std 0 across seeds); LightGBM varies with seed. No transaction costs or slippage. Data (~25k rows) is far below the 200k subsampling threshold, so none applied. The paper's specific white-box algorithm is not specified, so the baseline is a generic logistic regression.
+
 ## Reference
 
 This project is motivated by the following paper:
