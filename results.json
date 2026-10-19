@@ -1,0 +1,40 @@
+{
+  "question": "Does a class-balanced, CV-tuned gradient-boosting model on technical indicators give a higher out-of-sample Sharpe ratio than a white-box logistic-regression model on the same indicators for daily stock trading?",
+  "method": "Daily OHLCV for AAPL, MSFT, JPM, XOM, JNJ (stooq, with Yahoo Finance chart API as fallback when stooq is unavailable); technical indicators from past prices; target = next-day up/down; per-ticker chronological 70/30 train/test split; long-or-flat strategy Sharpe on the test period.",
+  "dataset": {
+    "name": "Daily OHLCV: AAPL, MSFT, JPM, XOM, JNJ (US listings)",
+    "source_url": "https://stooq.com/q/d/l/?s=aapl.us&i=d, https://stooq.com/q/d/l/?s=msft.us&i=d, https://stooq.com/q/d/l/?s=jpm.us&i=d, https://stooq.com/q/d/l/?s=xom.us&i=d, https://stooq.com/q/d/l/?s=jnj.us&i=d (fallback: https://query1.finance.yahoo.com/v8/finance/chart/<TICKER>?range=max&interval=1d&events=div%7Csplit)",
+    "source_used": {
+      "aapl": "yahoo",
+      "msft": "yahoo",
+      "jpm": "yahoo",
+      "xom": "yahoo",
+      "jnj": "yahoo"
+    },
+    "n_rows": 530,
+    "n_train": 367,
+    "n_test": 163,
+    "same_as_paper": false,
+    "baseline_is_papers_method": false
+  },
+  "metric_name": "annualised Sharpe ratio of long-or-flat strategy (test period)",
+  "higher_is_better": true,
+  "baseline": "Standardised logistic regression (default settings) on technical indicators; white-box.",
+  "improved": "Class-balanced LightGBM, small time-series-CV hyperparameter search on training data only, isotonic calibration.",
+  "metrics": {
+    "baseline_score": 8.083009241447979,
+    "improved_score": 8.89164534927544,
+    "improvement": 0.8086361078274606,
+    "baseline_score_std": 0.0,
+    "improved_score_std": 0.0,
+    "baseline_accuracy": 0.6380368098159509,
+    "improved_accuracy": 0.6809815950920245,
+    "baseline_f1": 0.7739463601532567,
+    "improved_f1": 0.7984496124031008,
+    "baseline_max_drawdown": -0.27524822299772833,
+    "improved_max_drawdown": -0.22782324475788784,
+    "buy_hold_sharpe": 8.09743407147216,
+    "n_seeds": 3
+  },
+  "notes": "Single chronological 70/30 split per ticker; one test period, so results are sensitive to the market regime. Price data: 0/5 tickers from stooq, the rest from the Yahoo Finance chart API fallback (stooq returned 404 for some tickers in CI); Yahoo prices use adjusted close. Hyperparameters chosen by time-series CV on training data only; test set used once. Logistic regression is deterministic (std 0 across seeds); LightGBM varies with seed. No transaction costs or slippage. Data (~25k rows) is far below the 200k subsampling threshold, so none applied. The paper's specific white-box algorithm is not specified, so the baseline is a generic logistic regression."
+}
